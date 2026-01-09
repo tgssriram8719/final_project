@@ -1,96 +1,79 @@
 # backend/database.py
 
-from typing import List, Dict, Any
 import os
+from typing import List, Dict, Any
+from pathlib import Path
 
-# --------- IN-MEMORY STORES (TEMPORARY) ---------
+from dotenv import load_dotenv
 
-# Nmap scan rows per scan_type
+# Load .env from project root
+ROOT_DIR = Path(__file__).resolve().parents[1]
+env_path = ROOT_DIR / ".env"
+load_dotenv(env_path)
+
+# -------------------------------------------------
+# SIMPLE IN-MEMORY STORAGE (ADAPT IF YOU USE REAL DB)
+# -------------------------------------------------
+
+# You may already have these; keep your existing implementations if so.
 _nmap_results: Dict[str, List[Dict[str, Any]]] = {}
+_scan_metadata: Dict[str, Dict[str, Any]] = {}
+_layer2_results: Dict[str, Dict[str, Any]] = {}
 
-# Last scan metadata
-_scan_metadata: Dict[str, Any] = {}
-
-# Layer 2 processed results (can hold multiple scans)
-_layer2_results: List[Dict[str, Any]] = []
-
-
-# --------- LAYER 1: NMAP RESULTS ---------
 
 def save_nmap_results(rows: List[Dict[str, Any]], scan_type: str = "Normal") -> None:
-    """
-    Store flat Nmap rows (output of layer1_scanner.main.run_scan).
-    """
     _nmap_results[scan_type] = rows
 
 
 def get_nmap_results(scan_type: str = "Normal") -> List[Dict[str, Any]]:
-    """
-    Return Nmap rows for given scan_type.
-    """
     return _nmap_results.get(scan_type, [])
 
 
-def save_scan_metadata(meta: Dict[str, Any]) -> None:
-    """
-    Store basic scan metadata (scan_type, target, timestamp, etc.).
-    """
-    global _scan_metadata
-    _scan_metadata = meta
+def save_scan_metadata(meta: Dict[str, Any], scan_type: str | None = None) -> None:
+    st = scan_type or meta.get("scan_type", "Normal")
+    _scan_metadata[st] = meta
 
 
 def get_scan_metadata(scan_type: str = "Normal") -> Dict[str, Any]:
-    """
-    Metadata endpoint used by dashboard.data_loader.load_scan_metadata.
-    """
-    if not _scan_metadata:
-        return {"scan_type": scan_type}
-    return _scan_metadata
+    return _scan_metadata.get(scan_type, {"scan_type": scan_type})
 
 
-# --------- LAYER 2: VULNERABILITIES & RISK ---------
+def save_layer2_result(result: Dict[str, Any], scan_type: str | None = None) -> None:
+    st = scan_type or result.get("scan_type", "Normal")
+    _layer2_results[st] = result
 
-def save_layer2_result(result: Dict[str, Any]) -> None:
-    """
-    Save one full Layer 2 pipeline output document.
-    """
-    _layer2_results.append(result)
+
+def _get_layer2(scan_type: str = "Normal") -> Dict[str, Any]:
+    return _layer2_results.get(scan_type, {})
 
 
 def get_vulnerabilities(scan_type: str = "Normal") -> List[Dict[str, Any]]:
     """
-    Return a flat list of vulnerabilities across all Layer 2 results.
-    Used by /vulnerabilities for dashboard pages.
+    Return flat vulnerability list from Layer‑2 result.
+    Expects Layer‑2 to store under key 'vulnerabilities'.
     """
-    vulns: List[Dict[str, Any]] = []
-    for r in _layer2_results:
-        items = (
-            r.get("vulnerabilities")
-            or r.get("normalized_vulnerabilities")
-            or []
-        )
-        vulns.extend(items)
-    return vulns
+    l2 = _get_layer2(scan_type)
+    vulns = l2.get("vulnerabilities", [])
+    return vulns if isinstance(vulns, list) else []
 
 
 def get_risk_summary(scan_type: str = "Normal") -> List[Dict[str, Any]]:
     """
-    Return a list of summary/risk objects per asset or scan.
-    Used by /risk/summary for risk_analysis.py & threat_summary.py.
+    Return risk summary from Layer‑2 result.
+    Adjust key if your pipeline uses a different name.
     """
-    summaries: List[Dict[str, Any]] = []
-    for r in _layer2_results:
-        if "summary" in r:
-            summaries.append(r["summary"])
-        elif "risk_summary" in r:
-            summaries.append(r["risk_summary"])
-    return summaries
+    l2 = _get_layer2(scan_type)
+    summary = l2.get("summary", [])
+    return summary if isinstance(summary, list) else []
 
 
-# --------- LAYER 3: AI CONFIG ---------
+# -------------------------------------------------
+# OPENROUTER KEY ACCESSOR
+# -------------------------------------------------
 
-def get_openrouter_key() -> str:
+def get_openrouter_key() -> str | None:
     """
-    Provide OpenRouter API key to Layer 3 CVESummarizer.
+    Return the OpenRouter API key from environment.
+    Requires OPENROUTER_API_KEY in .env at project root.
     """
-    return os.getenv("OPENROUTER_API_KEY", "")
+    return os.getenv("OPENROUTER_API_KEY")

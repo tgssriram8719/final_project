@@ -9,7 +9,7 @@ from typing import Dict, Any, List
 # ===================== CONFIG =====================
 
 # Backend will pass the real key via database.get_openrouter_key()
-OPENROUTER_API_KEY = "YOUR_API_KEY_HERE"
+OPENROUTER_API_KEY = "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"
 MODEL_NAME = "openai/gpt-4o-mini"
 OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 

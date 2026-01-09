@@ -9,77 +9,123 @@ def run(context=None):
 
     st.subheader("AI Analyst — CVE Explanations (Layer 3)")
 
+    # ===================== PART 1: CVE EXPLAINER (existing behavior) =====================
+
     vulns = load("/vulnerabilities", scan_type)
 
     if vulns is None or getattr(vulns, "empty", True):
         st.info("No vulnerabilities available to analyze")
-        return
+    else:
+        vulns.columns = [c.lower() for c in vulns.columns]
 
-    vulns.columns = [c.lower() for c in vulns.columns]
+        if "cve" not in vulns.columns:
+            st.warning("No CVE column found in vulnerability data")
+        else:
+            cve_list = sorted(vulns["cve"].dropna().unique().tolist())
+            selected_cve = st.selectbox("Select CVE to analyze", cve_list)
 
-    if "cve" not in vulns.columns:
-        st.warning("No CVE column found in vulnerability data")
-        return
+            if selected_cve:
+                row = vulns[vulns["cve"] == selected_cve].iloc[0]
 
-    cve_list = sorted(vulns["cve"].dropna().unique().tolist())
-    selected_cve = st.selectbox("Select CVE to analyze", cve_list)
+                st.markdown(f"**Selected CVE:** `{selected_cve}`")
 
-    if not selected_cve:
-        return
+                cvss_vector = row.get("cvss_vector", "")
+                severity = row.get("severity", "")
+                cvss_score = row.get("cvss", row.get("cvss_score", None))
 
-    row = vulns[vulns["cve"] == selected_cve].iloc[0]
+                affected_assets = []
+                if "host" in vulns.columns:
+                    affected_assets = (
+                        vulns[vulns["cve"] == selected_cve]["host"]
+                        .astype(str)
+                        .unique()
+                        .tolist()
+                    )
 
-    st.markdown(f"**Selected CVE:** `{selected_cve}`")
+                payload = {
+                    "cve_id": selected_cve,
+                    "cvss_vector": cvss_vector,
+                    "severity": severity,
+                    "cvss_score": cvss_score,
+                    "affected_assets": affected_assets,
+                }
 
-    cvss_vector = row.get("cvss_vector", "")
-    severity = row.get("severity", "")
-    cvss_score = row.get("cvss", row.get("cvss_score", None))
+                if st.button("Generate AI Explanation"):
+                    with st.spinner("Contacting AI engine..."):
+                        try:
+                            r = requests.post(
+                                f"{API}/layer3/cve/summary",
+                                json=payload,
+                                timeout=60,
+                            )
+                            r.raise_for_status()
+                            data = r.json()
+                        except Exception as e:
+                            st.error(f"Error calling AI endpoint: {e}")
+                        else:
+                            st.markdown("### Simple Summary")
+                            st.write(data.get("simple_summary", ""))
 
-    affected_assets = []
-    if "host" in vulns.columns:
-        affected_assets = (
-            vulns[vulns["cve"] == selected_cve]["host"]
-            .astype(str)
-            .unique()
-            .tolist()
-        )
+                            st.markdown("### Simple Description")
+                            st.write(data.get("simple_description", ""))
 
-    payload = {
-        "cve_id": selected_cve,
-        "cvss_vector": cvss_vector,
-        "severity": severity,
-        "cvss_score": cvss_score,
-        "affected_assets": affected_assets,
-    }
+                            st.markdown("### Affected Products")
+                            products = data.get("affected_products", [])
+                            st.write(
+                                ", ".join(products) if products else "Not detected"
+                            )
 
-    if st.button("Generate AI Explanation"):
-        with st.spinner("Contacting AI engine..."):
-            try:
-                r = requests.post(
-                    f"{API}/layer3/cve/summary", json=payload, timeout=60
-                )
-                r.raise_for_status()
-                data = r.json()
-            except Exception as e:
-                st.error(f"Error calling AI endpoint: {e}")
-                return
+                            st.markdown("### Suggested Fixes")
+                            for fix in data.get("fixes", []):
+                                st.markdown(f"- {fix}")
 
-        st.markdown("### Simple Summary")
-        st.write(data.get("simple_summary", ""))
+                            st.markdown("### EPSS‑style Score")
+                            st.write(
+                                f"Current: {data.get('epss_score')} | "
+                                f"30‑day: {data.get('epss_30d_prediction')}"
+                            )
 
-        st.markdown("### Simple Description")
-        st.write(data.get("simple_description", ""))
+    # ===================== PART 2: HELP CHATBOT =====================
 
-        st.markdown("### Affected Products")
-        products = data.get("affected_products", [])
-        st.write(", ".join(products) if products else "Not detected")
+    st.markdown("---")
+    st.markdown("### Ask the AI Analyst")
 
-        st.markdown("### Suggested Fixes")
-        for fix in data.get("fixes", []):
-            st.markdown(f"- {fix}")
+    if "ai_chat_history" not in st.session_state:
+        st.session_state.ai_chat_history = []
 
-        st.markdown("### EPSS‑style Score")
-        st.write(
-            f"Current: {data.get('epss_score')} | "
-            f"30‑day: {data.get('epss_30d_prediction')}"
-        )
+    user_question = st.text_area(
+        "Type your question about this scan",
+        key="ai_chat_input",
+        placeholder="Example: Which vulnerabilities should I fix first and why?",
+    )
+
+    if st.button("Ask AI Analyst"):
+        if not user_question.strip():
+            st.warning("Please enter a question.")
+        else:
+            with st.spinner("Analyzing scan and generating answer..."):
+                try:
+                    payload = {
+                        "question": user_question,
+                        "scan_type": scan_type,
+                    }
+                    r = requests.post(
+                        f"{API}/layer3/chat", json=payload, timeout=90
+                    )
+                    r.raise_for_status()
+                    answer = r.json().get("answer", "")
+                    st.session_state.ai_chat_history.append(
+                        ("You", user_question)
+                    )
+                    st.session_state.ai_chat_history.append(
+                        ("AI Analyst", answer)
+                    )
+                except Exception as e:
+                    st.error(f"Error contacting AI chat endpoint: {e}")
+
+    # Display chat history
+    for speaker, msg in st.session_state.ai_chat_history:
+        if speaker == "You":
+            st.markdown(f"**🧑 {speaker}:** {msg}")
+        else:
+            st.markdown(f"**🤖 {speaker}:** {msg}")
